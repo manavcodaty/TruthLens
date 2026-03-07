@@ -1,11 +1,14 @@
 import {
+  DynamicRetrievalMode,
   GoogleGenerativeAI,
   SchemaType,
 } from "@google/generative-ai";
-import type { ResponseSchema } from "@google/generative-ai";
+import type { ResponseSchema, Tool } from "@google/generative-ai";
+import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
+import { AzureKeyCredential } from "@azure/core-auth";
 import { NextResponse } from "next/server";
 
-import { DEFAULT_ANALYSIS_RESULT } from "@/lib/analysis";
+import { DEFAULT_ANALYSIS_RESULT, normalizeAnalysisResult } from "@/lib/analysis";
 
 const MODEL_CANDIDATES = [
   process.env.GEMINI_MODEL,
@@ -13,6 +16,8 @@ const MODEL_CANDIDATES = [
   "gemini-2.0-flash",
   "gemini-2.5-flash-lite",
 ].filter((model): model is string => Boolean(model));
+
+const FOUNDRY_MODEL = "meta/Meta-Llama-3.1-8B-Instruct";
 
 const RESPONSE_SCHEMA = {
   type: SchemaType.OBJECT,
@@ -70,33 +75,219 @@ const RESPONSE_SCHEMA = {
   ],
 };
 
-export async function POST(request: Request) {
+const SEARCH_TOOLS: Tool[] = [
+  {
+    googleSearchRetrieval: {
+      dynamicRetrievalConfig: {
+        mode: DynamicRetrievalMode.MODE_DYNAMIC,
+        dynamicThreshold: 0,
+      },
+    },
+  },
+];
+
+const SYSTEM_INSTRUCTION = `
+You are TruthLens, an explainable credibility analysis assistant.
+
+Rules:
+1) For time-sensitive or changing claims (events, policies, prices, figures, personnel, legal status, product releases), use Google Search retrieval before final judgment.
+2) Do not mark claims false merely because they are newer than your training data.
+3) If evidence is mixed or insufficient, prefer uncertainty over overconfident rejection.
+4) In sourceNotes/contextNotes, explicitly mention whether web sources were checked and what verification gaps remain.
+5) Return only valid JSON matching the requested schema.
+`.trim();
+
+class FoundryPolicyBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "FoundryPolicyBlockedError";
+  }
+}
+
+function usesUnsupportedSearchError(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    (text.includes("google search") || text.includes("googlesearchretrieval")) &&
+    (text.includes("not supported") ||
+      text.includes("unsupported") ||
+      text.includes("invalid argument"))
+  );
+}
+
+function isFoundryPolicyBlockedMessage(message: string): boolean {
+  const text = message.toLowerCase();
+  return (
+    text.includes("content management policy") ||
+    (text.includes("filtered") && text.includes("policy")) ||
+    text.includes("responsible ai policy")
+  );
+}
+
+function getFoundryConfig() {
+  const endpoint =
+    process.env.AZURE_AI_FOUNDRY_ENDPOINT ??
+    process.env.AZURE_FOUNDRY_ENDPOINT ??
+    process.env.FOUNDRY_ENDPOINT;
+  const apiKey =
+    process.env.AZURE_AI_FOUNDRY_API_KEY ??
+    process.env.AZURE_FOUNDRY_API_KEY ??
+    process.env.FOUNDRY_API_KEY;
+
+  return {
+    endpoint,
+    apiKey,
+  };
+}
+
+function extractJsonCandidate(text: string): unknown {
+  const trimmed = text.trim();
+
   try {
-    const payload = await request.json();
-    const text = payload?.text;
+    return JSON.parse(trimmed);
+  } catch {
+    // Continue to fallback parsers.
+  }
 
-    if (typeof text !== "string" || text.trim().length === 0) {
-      return NextResponse.json(
-        { error: "Request body must include a non-empty text string." },
-        { status: 400 }
-      );
+  const fencedJsonMatch = trimmed.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fencedJsonMatch?.[1]) {
+    try {
+      return JSON.parse(fencedJsonMatch[1]);
+    } catch {
+      // Continue to fallback parsers.
     }
+  }
 
-    const apiKey = process.env.GEMINI_API_KEY;
+  const firstBrace = trimmed.indexOf("{");
+  if (firstBrace === -1) {
+    throw new Error("No JSON object found in model response.");
+  }
 
-    if (!apiKey) {
-      throw new Error("GEMINI_API_KEY is not set.");
+  let depth = 0;
+  for (let index = firstBrace; index < trimmed.length; index += 1) {
+    const char = trimmed[index];
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        const candidate = trimmed.slice(firstBrace, index + 1);
+        return JSON.parse(candidate);
+      }
     }
+  }
 
-    const prompt = `Analyze the following text. You MUST return ONLY a valid JSON object matching this exact schema: { credibilityScore: '...', summary: '...', mainClaims: ['...'], flags: [{ type: '...', quote: '...', explanation: '...' }], sourceNotes: '...', contextNotes: '...', nextSteps: ['...'] }. Text to analyze: ${text}`;
+  throw new Error("Unable to parse a balanced JSON object from model response.");
+}
 
-    const client = new GoogleGenerativeAI(apiKey);
-    let lastError: unknown = null;
+function buildPolicyFallbackAnalysis(text: string, reason: string) {
+  const sentences = text
+    .split(/(?<=[.!?])\s+/)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length > 0);
 
-    for (const model of MODEL_CANDIDATES) {
+  const mainClaims = sentences.slice(0, 4);
+  const lower = text.toLowerCase();
+  const flags: Array<{ type: string; quote: string; explanation: string }> = [];
+
+  const urgencyTerms = [
+    "breaking",
+    "urgent",
+    "immediately",
+    "right now",
+    "before",
+    "move your money",
+    "prepare now",
+  ];
+  if (urgencyTerms.some((term) => lower.includes(term))) {
+    flags.push({
+      type: "Emotional Language",
+      quote: mainClaims[0] ?? "",
+      explanation:
+        "Urgency or fear framing can pressure readers into quick conclusions before verification.",
+    });
+  }
+
+  const sourcingTerms = [
+    "insiders",
+    "sources say",
+    "they say",
+    "officials are hiding",
+    "unnamed",
+    "experts shocked",
+  ];
+  if (sourcingTerms.some((term) => lower.includes(term))) {
+    flags.push({
+      type: "Weak Sourcing",
+      quote: mainClaims[0] ?? "",
+      explanation:
+        "The claim appears to rely on vague or unnamed sources, which lowers verifiability.",
+    });
+  }
+
+  const certaintyTerms = [
+    "proves",
+    "guaranteed",
+    "always",
+    "never",
+    "shocked",
+    "admit",
+    "refuse to cover",
+  ];
+  if (certaintyTerms.some((term) => lower.includes(term))) {
+    flags.push({
+      type: "Overconfident Framing",
+      quote: mainClaims[0] ?? "",
+      explanation:
+        "Strong certainty language can overstate conclusions relative to available evidence.",
+    });
+  }
+
+  flags.push({
+    type: "Missing Context",
+    quote: "",
+    explanation:
+      "Independent context, timeline detail, and primary-source support are required before trusting this claim.",
+  });
+
+  const credibilityScore =
+    flags.length >= 3 ? "High-risk / likely misleading" : "Mixed / use caution";
+
+  return normalizeAnalysisResult({
+    credibilityScore,
+    summary:
+      "Automated provider analysis was safety-filtered, so this is a conservative heuristic assessment. Verify with primary sources.",
+    mainClaims,
+    flags,
+    sourceNotes:
+      "Primary AI provider output was blocked by content policy for this input. Source quality could not be fully model-evaluated.",
+    contextNotes:
+      "The claim should be checked against recent, independent reporting and official primary documents.",
+    nextSteps: [
+      "Look for at least two independent primary or high-credibility secondary sources.",
+      "Verify names, dates, and quoted evidence directly from original publications.",
+      "Treat urgency/fear language as a signal to slow down verification, not accelerate sharing.",
+      `Provider note: ${reason}`,
+    ],
+  });
+}
+
+async function runGeminiAnalysis(prompt: string) {
+  const apiKey = process.env.GEMINI_API_KEY;
+
+  if (!apiKey) {
+    throw new Error("GEMINI_API_KEY is not set.");
+  }
+
+  const client = new GoogleGenerativeAI(apiKey);
+  let lastError: unknown = null;
+
+  for (const model of MODEL_CANDIDATES) {
+    for (const useSearch of [true, false]) {
       try {
         const generativeModel = client.getGenerativeModel({
           model,
+          systemInstruction: SYSTEM_INSTRUCTION,
+          tools: useSearch ? SEARCH_TOOLS : undefined,
           generationConfig: {
             responseMimeType: "application/json",
             responseSchema: RESPONSE_SCHEMA as unknown as ResponseSchema,
@@ -109,21 +300,128 @@ export async function POST(request: Request) {
           throw new Error("Gemini returned an empty response.");
         }
 
-        return NextResponse.json(JSON.parse(responseText), { status: 200 });
+        const parsed = extractJsonCandidate(responseText);
+        return normalizeAnalysisResult(parsed);
       } catch (error) {
         lastError = error;
 
         const message = error instanceof Error ? error.message : String(error);
+        const is404 = message.includes("404");
 
-        if (!message.includes("404")) {
-          throw error;
+        if (is404) {
+          // Try the next model.
+          break;
         }
+
+        if (useSearch && usesUnsupportedSearchError(message)) {
+          // Retry once without search tool for this model.
+          continue;
+        }
+
+        throw error;
       }
     }
+  }
 
-    throw lastError ?? new Error("No Gemini model could be used.");
+  throw lastError ?? new Error("No Gemini model could be used.");
+}
+
+async function runFoundryAnalysis(prompt: string) {
+  const { endpoint, apiKey } = getFoundryConfig();
+
+  if (!endpoint || !apiKey) {
+    throw new Error(
+      "Microsoft Foundry fallback is not configured. Set AZURE_AI_FOUNDRY_ENDPOINT and AZURE_AI_FOUNDRY_API_KEY."
+    );
+  }
+
+  const client = ModelClient(endpoint, new AzureKeyCredential(apiKey));
+  const response = await client.path("/chat/completions").post({
+    body: {
+      model: FOUNDRY_MODEL,
+      temperature: 0.2,
+      max_tokens: 1300,
+      response_format: {
+        type: "json_object",
+      },
+      messages: [
+        { role: "system", content: SYSTEM_INSTRUCTION },
+        { role: "user", content: prompt },
+      ],
+    },
+  });
+
+  if (isUnexpected(response)) {
+    const reason =
+      typeof response.body?.error?.message === "string"
+        ? response.body.error.message
+        : "Foundry returned an unexpected response.";
+    if (isFoundryPolicyBlockedMessage(reason)) {
+      throw new FoundryPolicyBlockedError(reason);
+    }
+    throw new Error(reason);
+  }
+
+  const messageContent = response.body.choices?.[0]?.message?.content;
+  if (typeof messageContent !== "string" || messageContent.trim().length === 0) {
+    throw new Error("Foundry returned an empty completion.");
+  }
+
+  const parsed = extractJsonCandidate(messageContent);
+  return normalizeAnalysisResult(parsed);
+}
+
+export async function POST(request: Request) {
+  try {
+    const payload = await request.json();
+    const text = payload?.text;
+
+    if (typeof text !== "string" || text.trim().length === 0) {
+      return NextResponse.json(
+        { error: "Request body must include a non-empty text string." },
+        { status: 400 }
+      );
+    }
+
+    const today = new Date().toISOString().slice(0, 10);
+    const prompt = `Current date: ${today}.
+
+Analyze the text below for credibility.
+You MUST return ONLY a valid JSON object matching this exact schema:
+{
+  credibilityScore: '...',
+  summary: '...',
+  mainClaims: ['...'],
+  flags: [{ type: '...', quote: '...', explanation: '...' }],
+  sourceNotes: '...',
+  contextNotes: '...',
+  nextSteps: ['...']
+}
+
+When claims may depend on recent facts, use web retrieval evidence before concluding. If current evidence is unavailable, state uncertainty and what should be verified next.
+
+Text to analyze:
+${text}`;
+
+    try {
+      const geminiResult = await runGeminiAnalysis(prompt);
+      return NextResponse.json(geminiResult, { status: 200 });
+    } catch (geminiError) {
+      console.error("Gemini analysis failed, attempting Foundry fallback:", geminiError);
+    }
+
+    try {
+      const foundryResult = await runFoundryAnalysis(prompt);
+      return NextResponse.json(foundryResult, { status: 200 });
+    } catch (foundryError) {
+      if (foundryError instanceof FoundryPolicyBlockedError) {
+        const heuristicResult = buildPolicyFallbackAnalysis(text, foundryError.message);
+        return NextResponse.json(heuristicResult, { status: 200 });
+      }
+      throw foundryError;
+    }
   } catch (error) {
-    console.error("Gemini analysis failed:", error);
+    console.error("All analysis providers failed:", error);
     return NextResponse.json(DEFAULT_ANALYSIS_RESULT, { status: 500 });
   }
 }

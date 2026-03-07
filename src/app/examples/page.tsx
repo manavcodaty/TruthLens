@@ -11,7 +11,7 @@ export default function ExamplesPage() {
     <>
       <SiteHeader activeTab="examples" />
 
-      <main className="mx-auto w-full max-w-[1240px] px-6 pb-16 pt-10 lg:px-10">
+      <main className="mx-auto w-full max-w-[1560px] px-4 pb-16 pt-10 lg:px-6">
         <section className="space-y-3">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
             Curated examples

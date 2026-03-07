@@ -19,7 +19,7 @@ interface SiteHeaderProps {
 export function SiteHeader({ activeTab }: SiteHeaderProps) {
   return (
     <header className="sticky top-0 z-50 border-b border-border/70 bg-background/92 backdrop-blur-xl">
-      <div className="mx-auto flex h-18 w-full max-w-[1240px] items-center justify-between px-6 lg:px-10">
+      <div className="mx-auto flex h-18 w-full max-w-[1560px] items-center justify-between px-4 lg:px-6">
         <Link
           href="/"
           className="inline-flex items-center gap-3 text-sm font-semibold tracking-[0.06em] text-foreground"

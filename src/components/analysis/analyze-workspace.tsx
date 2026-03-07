@@ -115,7 +115,7 @@ export function AnalyzeWorkspace({
   }
 
   return (
-    <main className="mx-auto w-full max-w-[1240px] px-6 pb-14 pt-10 lg:px-10">
+    <main className="mx-auto w-full max-w-[1560px] px-4 pb-14 pt-10 lg:px-6">
       <section className="mb-9 flex flex-wrap items-end justify-between gap-4">
         <div className="max-w-3xl space-y-2">
           <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">

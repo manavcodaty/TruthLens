@@ -10,7 +10,7 @@ const FOOTER_LINKS = [
 export function SiteFooter() {
   return (
     <footer className="border-t border-border/70 bg-card/70">
-      <div className="mx-auto grid w-full max-w-[1240px] gap-8 px-6 py-10 text-sm text-muted-foreground lg:grid-cols-[1.4fr_1fr_1fr] lg:px-10">
+      <div className="mx-auto grid w-full max-w-[1560px] gap-8 px-4 py-10 text-sm text-muted-foreground lg:grid-cols-[1.4fr_1fr_1fr] lg:px-6">
         <div>
           <p className="font-medium tracking-[0.08em] text-foreground">TruthLens</p>
           <p className="mt-3 max-w-sm leading-relaxed">

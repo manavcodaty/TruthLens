@@ -83,7 +83,7 @@ export default function HomePage() {
       <SiteHeader activeTab="home" />
 
       <main className="relative overflow-x-clip pb-14">
-        <section className="mx-auto grid w-full max-w-[1240px] gap-16 px-6 pb-20 pt-14 lg:grid-cols-[1.1fr_0.9fr] lg:px-10">
+        <section className="mx-auto grid w-full max-w-[1560px] gap-16 px-4 pb-20 pt-14 lg:grid-cols-[1.1fr_0.9fr] lg:px-6">
           <div className="space-y-8">
             <p className="inline-flex items-center gap-2 rounded-full border border-border/80 bg-card px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               <ShieldCheck className="size-3.5 text-primary" />
@@ -162,7 +162,7 @@ export default function HomePage() {
         </section>
 
         <section className="border-y border-border/70 bg-card/50">
-          <div className="mx-auto flex w-full max-w-[1240px] flex-wrap items-center gap-3 px-6 py-6 lg:px-10">
+          <div className="mx-auto flex w-full max-w-[1560px] flex-wrap items-center gap-3 px-4 py-6 lg:px-6">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               Trusted framing for
             </p>
@@ -177,7 +177,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section id="features" className="mx-auto w-full max-w-[1240px] px-6 py-20 lg:px-10">
+        <section id="features" className="mx-auto w-full max-w-[1560px] px-4 py-20 lg:px-6">
           <div className="max-w-2xl space-y-3">
             <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
               Feature overview
@@ -215,7 +215,7 @@ export default function HomePage() {
         </section>
 
         <section className="bg-card/40">
-          <div className="mx-auto w-full max-w-[1240px] px-6 py-20 lg:px-10">
+          <div className="mx-auto w-full max-w-[1560px] px-4 py-20 lg:px-6">
             <div className="max-w-2xl space-y-3">
               <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
                 How it works
@@ -246,7 +246,7 @@ export default function HomePage() {
           </div>
         </section>
 
-        <section className="mx-auto w-full max-w-[1240px] px-6 py-18 lg:px-10">
+        <section className="mx-auto w-full max-w-[1560px] px-4 py-18 lg:px-6">
           <div className="rounded-3xl border border-border/80 bg-card p-10 text-center shadow-[0_30px_75px_-50px_rgba(15,23,42,0.5)]">
             <p className="text-[11px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">
               Ready to evaluate content with more clarity?

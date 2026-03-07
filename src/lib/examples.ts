@@ -12,8 +12,8 @@ export const ANALYSIS_EXAMPLES: AnalysisExample[] = [
     title: "Viral breakthrough claim",
     category: "Social post",
     summary:
-      "Urgent language and anonymous authority claims create pressure to act before verification.",
-    text: "Breaking: insiders at a private AI lab have already built a model that can shut down global payment systems by next week. Mainstream outlets refuse to cover it. Banks are preparing emergency closures. Move your money now before accounts freeze.",
+      "A panic-inducing viral-style rumor that uses urgency, secrecy, and fear to encourage immediate sharing without providing any verifiable source.",
+    text: "Dubai will go into a full citywide curfew tonight after secret emergency meetings. Residents are being told to stock up on food and fuel immediately before restrictions begin at midnight. Share this before they delete it.",
   },
   {
     id: "loaded-policy-thread",
@@ -41,7 +41,9 @@ export const ANALYSIS_EXAMPLES: AnalysisExample[] = [
   },
 ];
 
-export function getExampleById(id?: string | null): AnalysisExample | undefined {
+export function getExampleById(
+  id?: string | null,
+): AnalysisExample | undefined {
   if (!id) {
     return undefined;
   }
