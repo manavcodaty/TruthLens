@@ -19,11 +19,12 @@ export const metadata: Metadata = {
     "Explainable credibility analysis for headlines, articles, and online claims.",
   icons: {
     icon: [
-      { url: "/icon.png", sizes: "32x32", type: "image/png" },
-      { url: "/icon.png", sizes: "192x192", type: "image/png" },
+      { url: "/favicon.ico?v=2", sizes: "any" },
+      { url: "/icon.png?v=2", sizes: "32x32", type: "image/png" },
+      { url: "/icon.png?v=2", sizes: "192x192", type: "image/png" },
     ],
-    shortcut: [{ url: "/icon.png", type: "image/png" }],
-    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
+    shortcut: [{ url: "/favicon.ico?v=2", type: "image/x-icon" }],
+    apple: [{ url: "/apple-icon.png?v=2", sizes: "180x180", type: "image/png" }],
   },
 };
 
