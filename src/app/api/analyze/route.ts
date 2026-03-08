@@ -1,14 +1,18 @@
-import {
-  DynamicRetrievalMode,
-  GoogleGenerativeAI,
-  SchemaType,
-} from "@google/generative-ai";
-import type { ResponseSchema, Tool } from "@google/generative-ai";
+import { GoogleGenerativeAI, SchemaType } from "@google/generative-ai";
+import type { ResponseSchema } from "@google/generative-ai";
 import ModelClient, { isUnexpected } from "@azure-rest/ai-inference";
 import { AzureKeyCredential } from "@azure/core-auth";
 import { NextResponse } from "next/server";
 
-import { DEFAULT_ANALYSIS_RESULT, normalizeAnalysisResult } from "@/lib/analysis";
+import {
+  DEFAULT_ANALYSIS_RESULT,
+  normalizeAnalysisResult,
+  type AnalysisResult,
+} from "@/lib/analysis";
+import {
+  buildTavilyGrounding,
+  type TavilyGroundingResult,
+} from "@/lib/tavily";
 
 const MODEL_CANDIDATES = [
   process.env.GEMINI_MODEL,
@@ -75,26 +79,16 @@ const RESPONSE_SCHEMA = {
   ],
 };
 
-const SEARCH_TOOLS: Tool[] = [
-  {
-    googleSearchRetrieval: {
-      dynamicRetrievalConfig: {
-        mode: DynamicRetrievalMode.MODE_DYNAMIC,
-        dynamicThreshold: 0,
-      },
-    },
-  },
-];
-
 const SYSTEM_INSTRUCTION = `
 You are TruthLens, an explainable credibility analysis assistant.
 
 Rules:
-1) For time-sensitive or changing claims (events, policies, prices, figures, personnel, legal status, product releases), use Google Search retrieval before final judgment.
-2) Do not mark claims false merely because they are newer than your training data.
-3) If evidence is mixed or insufficient, prefer uncertainty over overconfident rejection.
-4) In sourceNotes/contextNotes, explicitly mention whether web sources were checked and what verification gaps remain.
-5) Return only valid JSON matching the requested schema.
+1) Use the LIVE_WEB_GROUNDING_PACK in the prompt as your primary evidence for time-sensitive or fast-moving claims.
+2) Compare the submitted text against grounded evidence and separate supported, unsupported, mixed, and uncertain parts.
+3) In sourceNotes/contextNotes, explicitly mention recency, source quality, official-source presence, and verification gaps.
+4) If evidence is sparse, stale, conflicting, or grounding failed, lower confidence and state uncertainty clearly.
+5) Do not mark claims false solely because details are still emerging.
+6) Return only valid JSON matching the requested schema.
 `.trim();
 
 class FoundryPolicyBlockedError extends Error {
@@ -102,16 +96,6 @@ class FoundryPolicyBlockedError extends Error {
     super(message);
     this.name = "FoundryPolicyBlockedError";
   }
-}
-
-function usesUnsupportedSearchError(message: string): boolean {
-  const text = message.toLowerCase();
-  return (
-    (text.includes("google search") || text.includes("googlesearchretrieval")) &&
-    (text.includes("not supported") ||
-      text.includes("unsupported") ||
-      text.includes("invalid argument"))
-  );
 }
 
 function isFoundryPolicyBlockedMessage(message: string): boolean {
@@ -271,6 +255,94 @@ function buildPolicyFallbackAnalysis(text: string, reason: string) {
   });
 }
 
+function mergeWarnings(baseWarnings: string[], extraWarnings: string[]): string[] {
+  const merged = [...baseWarnings, ...extraWarnings]
+    .map((warning) => warning.trim())
+    .filter((warning) => warning.length > 0);
+
+  return Array.from(new Set(merged));
+}
+
+function appendOnce(base: string, addition: string, marker: string): string {
+  if (!addition.trim()) {
+    return base;
+  }
+
+  if (base.includes(marker)) {
+    return base;
+  }
+
+  return `${base}\n\n${addition}`.trim();
+}
+
+function mergeGroundingIntoResult(
+  result: AnalysisResult,
+  groundingResult: TavilyGroundingResult
+): AnalysisResult {
+  const normalized = normalizeAnalysisResult(result);
+
+  const retrievalStamp = groundingResult.grounding.retrievedAt || "unknown";
+  const sourceSummary = groundingResult.grounding.succeeded
+    ? `Live Tavily grounding checked ${groundingResult.citations.length} source(s) at ${retrievalStamp}.`
+    : `Live Tavily grounding failed before model analysis. ${groundingResult.grounding.warning ?? "Model-only analysis was used."}`;
+
+  const timeSensitivityNote = groundingResult.grounding.isTimeSensitive
+    ? "Claim classified as time-sensitive: recency weighting was applied during retrieval."
+    : "Claim classified as less time-sensitive: broader corroboration was used.";
+
+  const warnings = mergeWarnings(normalized.warnings, groundingResult.warnings);
+
+  return normalizeAnalysisResult({
+    ...normalized,
+    citations: groundingResult.citations,
+    grounding: groundingResult.grounding,
+    warnings,
+    sourceNotes: appendOnce(
+      normalized.sourceNotes,
+      sourceSummary,
+      "Live Tavily grounding"
+    ),
+    contextNotes: appendOnce(
+      normalized.contextNotes,
+      timeSensitivityNote,
+      "Claim classified as"
+    ),
+  });
+}
+
+function buildGroundedPrompt(
+  text: string,
+  today: string,
+  groundingPromptContext: string
+): string {
+  return `Current date (UTC): ${today}.
+
+Task:
+Analyze the user-submitted content for credibility using the live evidence pack.
+Return ONLY a valid JSON object matching this exact schema:
+{
+  credibilityScore: '...',
+  summary: '...',
+  mainClaims: ['...'],
+  flags: [{ type: '...', quote: '...', explanation: '...' }],
+  sourceNotes: '...',
+  contextNotes: '...',
+  nextSteps: ['...']
+}
+
+Calibration requirements:
+- Prioritize LIVE_WEB_GROUNDING_PACK over model memory for time-sensitive claims.
+- Distinguish unsupported rumor, mixed evidence, and confirmed reporting.
+- Explicitly mention if evidence is recent, stale, sparse, conflicting, or official.
+- If grounding failed or evidence is weak, reduce confidence and recommend verification actions.
+- Avoid overclaiming certainty while details are still emerging.
+
+${groundingPromptContext}
+
+Text to analyze:
+${text}`;
+}
+
 async function runGeminiAnalysis(prompt: string) {
   const apiKey = process.env.GEMINI_API_KEY;
 
@@ -282,44 +354,35 @@ async function runGeminiAnalysis(prompt: string) {
   let lastError: unknown = null;
 
   for (const model of MODEL_CANDIDATES) {
-    for (const useSearch of [true, false]) {
-      try {
-        const generativeModel = client.getGenerativeModel({
-          model,
-          systemInstruction: SYSTEM_INSTRUCTION,
-          tools: useSearch ? SEARCH_TOOLS : undefined,
-          generationConfig: {
-            responseMimeType: "application/json",
-            responseSchema: RESPONSE_SCHEMA as unknown as ResponseSchema,
-          },
-        });
+    try {
+      const generativeModel = client.getGenerativeModel({
+        model,
+        systemInstruction: SYSTEM_INSTRUCTION,
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: RESPONSE_SCHEMA as unknown as ResponseSchema,
+        },
+      });
 
-        const responseText = (await generativeModel.generateContent(prompt)).response.text();
+      const responseText = (await generativeModel.generateContent(prompt)).response.text();
 
-        if (!responseText) {
-          throw new Error("Gemini returned an empty response.");
-        }
-
-        const parsed = extractJsonCandidate(responseText);
-        return normalizeAnalysisResult(parsed);
-      } catch (error) {
-        lastError = error;
-
-        const message = error instanceof Error ? error.message : String(error);
-        const is404 = message.includes("404");
-
-        if (is404) {
-          // Try the next model.
-          break;
-        }
-
-        if (useSearch && usesUnsupportedSearchError(message)) {
-          // Retry once without search tool for this model.
-          continue;
-        }
-
-        throw error;
+      if (!responseText) {
+        throw new Error("Gemini returned an empty response.");
       }
+
+      const parsed = extractJsonCandidate(responseText);
+      return normalizeAnalysisResult(parsed);
+    } catch (error) {
+      lastError = error;
+
+      const message = error instanceof Error ? error.message : String(error);
+      const is404 = message.includes("404");
+
+      if (is404) {
+        continue;
+      }
+
+      throw error;
     }
   }
 
@@ -356,9 +419,11 @@ async function runFoundryAnalysis(prompt: string) {
       typeof response.body?.error?.message === "string"
         ? response.body.error.message
         : "Foundry returned an unexpected response.";
+
     if (isFoundryPolicyBlockedMessage(reason)) {
       throw new FoundryPolicyBlockedError(reason);
     }
+
     throw new Error(reason);
   }
 
@@ -372,6 +437,8 @@ async function runFoundryAnalysis(prompt: string) {
 }
 
 export async function POST(request: Request) {
+  let groundingResult: TavilyGroundingResult | null = null;
+
   try {
     const payload = await request.json();
     const text = payload?.text;
@@ -383,45 +450,48 @@ export async function POST(request: Request) {
       );
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    const prompt = `Current date: ${today}.
+    const now = new Date();
+    const today = now.toISOString().slice(0, 10);
 
-Analyze the text below for credibility.
-You MUST return ONLY a valid JSON object matching this exact schema:
-{
-  credibilityScore: '...',
-  summary: '...',
-  mainClaims: ['...'],
-  flags: [{ type: '...', quote: '...', explanation: '...' }],
-  sourceNotes: '...',
-  contextNotes: '...',
-  nextSteps: ['...']
-}
-
-When claims may depend on recent facts, use web retrieval evidence before concluding. If current evidence is unavailable, state uncertainty and what should be verified next.
-
-Text to analyze:
-${text}`;
+    groundingResult = await buildTavilyGrounding(text, now);
+    const prompt = buildGroundedPrompt(text, today, groundingResult.promptContext);
 
     try {
       const geminiResult = await runGeminiAnalysis(prompt);
-      return NextResponse.json(geminiResult, { status: 200 });
+      console.info("[Analysis] Completed with Gemini primary path");
+      return NextResponse.json(
+        mergeGroundingIntoResult(geminiResult, groundingResult),
+        { status: 200 }
+      );
     } catch (geminiError) {
       console.error("Gemini analysis failed, attempting Foundry fallback:", geminiError);
     }
 
     try {
       const foundryResult = await runFoundryAnalysis(prompt);
-      return NextResponse.json(foundryResult, { status: 200 });
+      console.info("[Analysis] Completed with Foundry fallback path");
+      return NextResponse.json(
+        mergeGroundingIntoResult(foundryResult, groundingResult),
+        { status: 200 }
+      );
     } catch (foundryError) {
       if (foundryError instanceof FoundryPolicyBlockedError) {
+        console.warn("[Analysis] Foundry policy blocked, using heuristic fallback");
         const heuristicResult = buildPolicyFallbackAnalysis(text, foundryError.message);
-        return NextResponse.json(heuristicResult, { status: 200 });
+        return NextResponse.json(
+          mergeGroundingIntoResult(heuristicResult, groundingResult),
+          { status: 200 }
+        );
       }
       throw foundryError;
     }
   } catch (error) {
     console.error("All analysis providers failed:", error);
-    return NextResponse.json(DEFAULT_ANALYSIS_RESULT, { status: 500 });
+
+    const fallbackResult = groundingResult
+      ? mergeGroundingIntoResult(DEFAULT_ANALYSIS_RESULT, groundingResult)
+      : DEFAULT_ANALYSIS_RESULT;
+
+    return NextResponse.json(fallbackResult, { status: 500 });
   }
 }

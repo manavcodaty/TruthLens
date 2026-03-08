@@ -2,10 +2,13 @@ import type { ReactNode } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
+  Clock3,
   FileSearch,
   Flag,
+  Globe,
   Link2,
   ListChecks,
+  ShieldAlert,
   Telescope,
 } from "lucide-react";
 
@@ -96,6 +99,35 @@ function SectionCard({
       <div className="mt-4">{children}</div>
     </article>
   );
+}
+
+function formatRetrievedAt(isoTimestamp: string): string {
+  if (!isoTimestamp) {
+    return "Unavailable";
+  }
+
+  const parsed = new Date(isoTimestamp);
+  if (Number.isNaN(parsed.valueOf())) {
+    return "Unavailable";
+  }
+
+  return parsed.toLocaleString();
+}
+
+function recencyLabel(recency: string): string {
+  if (recency === "fresh") {
+    return "Fresh";
+  }
+  if (recency === "recent") {
+    return "Recent";
+  }
+  if (recency === "aging") {
+    return "Aging";
+  }
+  if (recency === "stale") {
+    return "Stale";
+  }
+  return "Unknown";
 }
 
 export function AnalysisResultView({
@@ -191,6 +223,70 @@ export function AnalysisResultView({
       </div>
 
       <div className={cn("grid gap-4", compact ? "xl:grid-cols-1" : "xl:grid-cols-2")}>
+        <SectionCard title="Live Web Grounding" icon={<Globe className="size-4 text-primary" />}>
+          <div className="space-y-3">
+            <div
+              className={cn(
+                "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-semibold",
+                result.grounding.succeeded
+                  ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                  : "border-amber-200 bg-amber-50 text-amber-900"
+              )}
+            >
+              {result.grounding.succeeded ? (
+                <>
+                  <BadgeCheck className="size-3.5" />
+                  Live grounding used
+                </>
+              ) : (
+                <>
+                  <ShieldAlert className="size-3.5" />
+                  Grounding failed (model-only fallback)
+                </>
+              )}
+            </div>
+
+            <div className="grid gap-2 text-sm text-foreground">
+              <p className="inline-flex items-center gap-2">
+                <Clock3 className="size-4 text-muted-foreground" />
+                Sources retrieved: {formatRetrievedAt(result.grounding.retrievedAt)}
+              </p>
+              <p>
+                Time-sensitive claim:{" "}
+                <span className="font-medium">
+                  {result.grounding.isTimeSensitive ? "Yes" : "No"}
+                </span>
+              </p>
+              <p>
+                Queries run:{" "}
+                <span className="font-medium">{result.grounding.searchQueries.length}</span>
+              </p>
+              <p>
+                Deep extract used:{" "}
+                <span className="font-medium">
+                  {result.grounding.usedExtract ? "Yes" : "No"}
+                </span>
+              </p>
+            </div>
+
+            {result.warnings.length > 0 ? (
+              <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/75 p-3 text-sm text-amber-900">
+                <p className="inline-flex items-center gap-2 font-semibold">
+                  <AlertTriangle className="size-4" />
+                  Grounding warnings
+                </p>
+                <ul className="space-y-1.5">
+                  {result.warnings.map((warning, index) => (
+                    <li key={`${warning}-${index}`} className="leading-relaxed">
+                      • {warning}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+          </div>
+        </SectionCard>
+
         <SectionCard title="Source Analysis" icon={<Link2 className="size-4 text-primary" />}>
           <p className="text-sm leading-relaxed text-foreground">{result.sourceNotes}</p>
         </SectionCard>
@@ -199,6 +295,39 @@ export function AnalysisResultView({
           <p className="text-sm leading-relaxed text-foreground">{result.contextNotes}</p>
         </SectionCard>
       </div>
+
+      <SectionCard title="Checked Sources" icon={<Link2 className="size-4 text-primary" />}>
+        {result.citations.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            No live citations were available for this run.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {result.citations.map((citation, index) => (
+              <article
+                key={`${citation.url}-${index}`}
+                className="rounded-xl border border-border/70 bg-background/75 p-3"
+              >
+                <a
+                  href={citation.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sm font-semibold text-foreground underline-offset-2 hover:underline"
+                >
+                  {citation.title}
+                </a>
+                <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                  <span>{citation.domain}</span>
+                  <span>{citation.sourceType}</span>
+                  <span>{recencyLabel(citation.recency)}</span>
+                  <span>{citation.publishedAt ?? "Date unavailable"}</span>
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-foreground">{citation.snippet}</p>
+              </article>
+            ))}
+          </div>
+        )}
+      </SectionCard>
 
       <SectionCard title="What To Verify Next" icon={<Telescope className="size-4 text-primary" />}>
         {result.nextSteps.length === 0 ? (

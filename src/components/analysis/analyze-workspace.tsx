@@ -305,6 +305,22 @@ export function AnalyzeWorkspace({
                   {result?.flags.length ?? 0}
                 </span>
               </p>
+              <p>
+                Sources checked:{" "}
+                <span className="font-medium text-foreground">
+                  {result?.citations.length ?? 0}
+                </span>
+              </p>
+              <p>
+                Grounding status:{" "}
+                <span className="font-medium text-foreground">
+                  {result?.grounding.succeeded
+                    ? "Live web grounded"
+                    : result
+                      ? "Model-only fallback"
+                      : "Waiting"}
+                </span>
+              </p>
             </div>
           </section>
         </aside>
