@@ -26,7 +26,7 @@ export function SiteHeader({ activeTab }: SiteHeaderProps) {
           className="inline-flex items-center gap-3 text-sm font-semibold tracking-[0.06em] text-foreground"
         >
           <BrandLogo className="h-8" priority />
-          <span>TruthLens</span>
+          <span className="text-base md:text-lg">TruthLens</span>
         </Link>
 
         <nav className="hidden items-center gap-1 md:flex">
