@@ -1,5 +1,6 @@
 import Link from "next/link";
 
+import { BrandLogo } from "@/components/site/brand-logo";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -24,9 +25,7 @@ export function SiteHeader({ activeTab }: SiteHeaderProps) {
           href="/"
           className="inline-flex items-center gap-3 text-sm font-semibold tracking-[0.06em] text-foreground"
         >
-          <span className="inline-flex size-8 items-center justify-center rounded-md border border-border bg-card text-primary">
-            TL
-          </span>
+          <BrandLogo className="h-8" priority />
           <span>TruthLens</span>
         </Link>
 

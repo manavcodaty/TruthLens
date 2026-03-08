@@ -17,6 +17,11 @@ export const metadata: Metadata = {
   title: "TruthLens",
   description:
     "Explainable credibility analysis for headlines, articles, and online claims.",
+  icons: {
+    icon: "/TruthLens.png",
+    apple: "/TruthLens.png",
+    shortcut: "/TruthLens.png",
+  },
 };
 
 export default function RootLayout({

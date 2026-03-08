@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { BrandLogo } from "@/components/site/brand-logo";
 
 const FOOTER_LINKS = [
   { href: "/", label: "Home" },
@@ -12,7 +13,10 @@ export function SiteFooter() {
     <footer className="border-t border-border/70 bg-card/70">
       <div className="mx-auto grid w-full max-w-[1560px] gap-8 px-4 py-10 text-sm text-muted-foreground lg:grid-cols-[1.4fr_1fr_1fr] lg:px-6">
         <div>
-          <p className="font-medium tracking-[0.08em] text-foreground">TruthLens</p>
+          <div className="inline-flex items-center gap-3">
+            <BrandLogo />
+            <p className="font-medium tracking-[0.08em] text-foreground">TruthLens</p>
+          </div>
           <p className="mt-3 max-w-sm leading-relaxed">
             Explainable credibility analysis for headlines, articles, and social
             claims.
