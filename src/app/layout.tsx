@@ -18,9 +18,12 @@ export const metadata: Metadata = {
   description:
     "Explainable credibility analysis for headlines, articles, and online claims.",
   icons: {
-    icon: "/TruthLens.png",
-    apple: "/TruthLens.png",
-    shortcut: "/TruthLens.png",
+    icon: [
+      { url: "/icon.png", sizes: "32x32", type: "image/png" },
+      { url: "/icon.png", sizes: "192x192", type: "image/png" },
+    ],
+    shortcut: [{ url: "/icon.png", type: "image/png" }],
+    apple: [{ url: "/apple-icon.png", sizes: "180x180", type: "image/png" }],
   },
 };
 
